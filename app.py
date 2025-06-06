@@ -2,17 +2,26 @@ import streamlit as st
 from utils.doc_reader import read_document
 import requests
 from pathlib import Path
+import json
 
-def query_ollama(prompt, model="llama3", context=None):
+def query_ollama_stream(prompt, model="llama3", context=None):
+    """
+    Stream the response from the local Ollama server.
+    """
     url = "http://localhost:11434/api/generate"
     payload = {
         "model": model,
         "prompt": f"{context}\n\n{prompt}",
-        "stream": False
+        "stream": True
     }
-    response = requests.post(url, json=payload)
-    return response.json()["response"]
 
+    response = requests.post(url, json=payload, stream=True)
+    for line in response.iter_lines():
+        if line:
+            data = json.loads(line.decode("utf-8"))
+            yield data.get("response", "")
+
+# Streamlit UI
 st.title("📄 LLM Document QA App")
 
 uploaded_file = st.file_uploader("Upload a document", type=["pdf", "docx", "txt"])
@@ -28,6 +37,8 @@ if uploaded_file:
 
     if user_prompt:
         with st.spinner("Thinking..."):
-            response = query_ollama(user_prompt, context=doc_content)
-        st.markdown("### 📤 LLM Response:")
-        st.markdown(response, unsafe_allow_html=True)
+            response_area = st.empty()
+            full_response = ""
+            for chunk in query_ollama_stream(user_prompt, context=doc_content):
+                full_response += chunk
+                response_area.markdown(full_response, unsafe_allow_html=True)
