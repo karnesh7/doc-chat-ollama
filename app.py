@@ -1,44 +1,106 @@
 import streamlit as st
 from utils.doc_reader import read_document
 import requests
-from pathlib import Path
 import json
 
-def query_ollama_stream(prompt, model="llama3", context=None):
-    """
-    Stream the response from the local Ollama server.
-    """
-    url = "http://localhost:11434/api/generate"
-    payload = {
-        "model": model,
-        "prompt": f"{context}\n\n{prompt}",
-        "stream": True
-    }
+# -------------------------------
+# Ollama model and config
+OLLAMA_MODEL = "llama3"
+OLLAMA_URL = "http://localhost:11434/api/chat"
 
-    response = requests.post(url, json=payload, stream=True)
-    for line in response.iter_lines():
-        if line:
-            data = json.loads(line.decode("utf-8"))
-            yield data.get("response", "")
+# -------------------------------
+# Session state setup
+if "document_text" not in st.session_state:
+    st.session_state.document_text = None
 
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+if "last_uploaded_file_name" not in st.session_state:
+    st.session_state.last_uploaded_file_name = None
+
+# -------------------------------
 # Streamlit UI
-st.title("📄 LLM Document QA App")
+st.set_page_config(page_title="LLM Document QA", layout="centered")
+st.title("📄 Chat with Your Document (Ollama + Streamlit)")
 
-uploaded_file = st.file_uploader("Upload a document", type=["pdf", "docx", "txt"])
-user_prompt = st.text_input("Ask something about the document:")
+uploaded_file = st.file_uploader("Upload a document (PDF, DOCX, or TXT)", type=["pdf", "docx", "txt"])
 
+# Handle new uploads (reset chat only if file changed)
 if uploaded_file:
-    file_path = Path(f"temp/{uploaded_file.name}")
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
+    if uploaded_file.name != st.session_state.last_uploaded_file_name:
+        st.session_state.document_text = read_document(uploaded_file)
+        st.success("✅ Document uploaded and processed successfully!")
+        st.session_state.chat_history = []  # reset chat history for new file
+        st.session_state.last_uploaded_file_name = uploaded_file.name
 
-    doc_content = read_document(str(file_path))
+# Show chat interface only if document is loaded
+if st.session_state.document_text:
+    st.subheader("Ask a question about the document:")
+    user_input = st.chat_input("Type your question...")
 
-    if user_prompt:
+    if user_input:
         with st.spinner("Thinking..."):
-            response_area = st.empty()
+
+            # Build messages: document + chat history + latest question
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a helpful assistant that answers questions based only on the provided document."
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        "Here's the document content:\n\n"
+                        + st.session_state.document_text[:5000]  # safety limit
+                    )
+                }
+            ]
+
+            # Add previous conversation history
+            for item in st.session_state.chat_history:
+                messages.append({"role": "user", "content": item["user"]})
+                messages.append({"role": "assistant", "content": item["bot"]})
+
+            # Add current user question
+            messages.append({"role": "user", "content": user_input})
+
+            # Send request to Ollama
+            response = requests.post(
+                OLLAMA_URL,
+                json={"model": OLLAMA_MODEL, "messages": messages},
+                stream=True
+            )
+
+            # Stream and display response
             full_response = ""
-            for chunk in query_ollama_stream(user_prompt, context=doc_content):
-                full_response += chunk
-                response_area.markdown(full_response, unsafe_allow_html=True)
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                for chunk in response.iter_lines():
+                    if chunk:
+                        line = chunk.decode("utf-8").strip()
+                        if line.startswith("data: "):
+                            line = line[len("data: "):]
+                        try:
+                            data = json.loads(line)
+                            token = data.get("message", {}).get("content", "")
+                            full_response += token
+                            message_placeholder.markdown(full_response)
+                        except json.JSONDecodeError:
+                            continue
+
+            # Save Q&A to history
+            st.session_state.chat_history.append({
+                "user": user_input,
+                "bot": full_response
+            })
+
+    # Display full conversation
+    if st.session_state.chat_history:
+        st.divider()
+        st.subheader("🗂 Chat History")
+        for i, turn in enumerate(st.session_state.chat_history, 1):
+            st.markdown(f"**Q{i}:** {turn['user']}")
+            st.markdown(f"**A{i}:** {turn['bot']}")
