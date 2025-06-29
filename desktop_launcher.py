@@ -2,37 +2,40 @@ import threading
 import webview
 import subprocess
 import time
-import os
+
+# Store process references
+ollama_proc = None
+streamlit_proc = None
 
 def start_ollama():
-    try:
-        # Start Ollama model (adjust the model name if needed)
-        subprocess.Popen(["ollama", "run", "llama3"])
-    except Exception as e:
-        print("Error launching Ollama:", e)
+    global ollama_proc
+    # Start a smaller/lighter model if needed
+    ollama_proc = subprocess.Popen(["ollama", "run", "llama3"])
 
 def start_streamlit():
+    global streamlit_proc
+    streamlit_proc = subprocess.Popen(["streamlit", "run", "app.py", "--server.headless", "true"])
+
+def stop_processes():
+    print("Shutting down processes...")
+    if streamlit_proc:
+        streamlit_proc.terminate()
+    if ollama_proc:
+        ollama_proc.terminate()
+
+if __name__ == "__main__":
     try:
-        subprocess.Popen(["streamlit", "run", "app.py", "--server.headless", "true"])
-    except Exception as e:
-        print("Error launching Streamlit:", e)
+        # Start Ollama and Streamlit in background threads
+        threading.Thread(target=start_ollama, daemon=True).start()
+        time.sleep(5)  # Wait a bit for Ollama to start
 
-# Start Ollama in a background thread
-ollama_thread = threading.Thread(target=start_ollama)
-ollama_thread.daemon = True
-ollama_thread.start()
+        threading.Thread(target=start_streamlit, daemon=True).start()
+        time.sleep(3)  # Wait a bit for Streamlit to start
 
-# Give it a few seconds to start the model
-time.sleep(5)
+        # Start the PyWebView app
+        webview.create_window("LLM Document QA App", "http://localhost:8501", width=1200, height=800)
+        webview.start()
 
-# Start Streamlit in a background thread
-streamlit_thread = threading.Thread(target=start_streamlit)
-streamlit_thread.daemon = True
-streamlit_thread.start()
-
-# Give Streamlit a bit of time to boot up
-time.sleep(3)
-
-# Launch native app window with webview
-webview.create_window("LLM Document QA App", "http://localhost:8501", width=1200, height=800)
-webview.start()
+    finally:
+        # This runs after the GUI window is closed
+        stop_processes()
