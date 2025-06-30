@@ -2,3 +2,4 @@ streamlit
 pymupdf
 python-docx
 requests
+pywebview
